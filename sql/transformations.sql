@@ -1,4 +1,3 @@
-```sql
 -- ============================================================
 -- BigQuery Data Transformations
 -- Project: ecomm-analytics-portfolio
@@ -73,24 +72,24 @@ SELECT
   EXTRACT(HOUR FROM transaction_timestamp) AS hour,
   EXTRACT(DAYOFWEEK FROM transaction_timestamp) AS day_of_week,
 
-  CASE 
+  CASE
     WHEN EXTRACT(DAYOFWEEK FROM transaction_timestamp) IN (1, 7) THEN 1
     ELSE 0
   END AS is_weekend,
 
   SAFE_DIVIDE(transaction_amount, quantity) AS amount_per_item,
 
-  CASE 
+  CASE
     WHEN account_age_days < 30 THEN 1
     ELSE 0
   END AS is_new_account,
 
-  CASE 
+  CASE
     WHEN EXTRACT(HOUR FROM transaction_timestamp) BETWEEN 0 AND 5 THEN 1
     ELSE 0
   END AS is_night_transaction,
 
-  CASE 
+  CASE
     WHEN LOWER(TRIM(shipping_address)) != LOWER(TRIM(billing_address)) THEN 1
     ELSE 0
   END AS address_mismatch,
@@ -148,7 +147,25 @@ FROM `ecomm-analytics-portfolio.ecom_analytics.fact_transactions`;
 -- Optional checks after running transformations
 -- ============================================================
 
--- Row count by layer
+
+-- ============================================================
+-- 4.1 Raw uniqueness validation
+-- Expected result from current pipeline:
+-- total_rows = 1,496,056
+-- distinct_transaction_ids = 1,496,056
+-- ============================================================
+
+SELECT
+  COUNT(*) AS total_rows,
+  COUNT(DISTINCT transaction_id) AS distinct_transaction_ids
+FROM `ecomm-analytics-portfolio.ecom_raw.transactions_raw`;
+
+
+-- ============================================================
+-- 4.2 Row count by layer
+-- Ensures data volume remains consistent across layers
+-- ============================================================
+
 SELECT
   'raw' AS layer,
   COUNT(*) AS total_rows
@@ -176,7 +193,14 @@ SELECT
 FROM `ecomm-analytics-portfolio.ecom_ml.features_fraud_train`;
 
 
--- Target distribution
+-- ============================================================
+-- 4.3 Target distribution
+-- Expected result from current pipeline:
+-- is_fraudulent = 0 → ~94.98%
+-- is_fraudulent = 1 → ~5.02%
+-- This confirms a realistic class imbalance for fraud detection.
+-- ============================================================
+
 SELECT
   is_fraudulent,
   COUNT(*) AS transactions,
@@ -186,10 +210,116 @@ GROUP BY is_fraudulent
 ORDER BY is_fraudulent;
 
 
--- Basic null validation
+-- ============================================================
+-- 4.4 Basic null validation
+-- Checks key modeling fields and target variable
+-- ============================================================
+
 SELECT
   COUNTIF(transaction_amount IS NULL) AS null_transaction_amount,
   COUNTIF(quantity IS NULL) AS null_quantity,
+  COUNTIF(amount_per_item IS NULL) AS null_amount_per_item,
   COUNTIF(customer_age IS NULL) AS null_customer_age,
+  COUNTIF(account_age_days IS NULL) AS null_account_age_days,
+  COUNTIF(hour IS NULL) AS null_hour,
+  COUNTIF(day_of_week IS NULL) AS null_day_of_week,
   COUNTIF(is_fraudulent IS NULL) AS null_target
 FROM `ecomm-analytics-portfolio.ecom_ml.features_fraud_train`;
+
+
+-- ============================================================
+-- 4.5 Feature range validation
+-- Ensures numeric and engineered variables are within expected ranges
+-- ============================================================
+
+SELECT
+  MIN(transaction_amount) AS min_transaction_amount,
+  MAX(transaction_amount) AS max_transaction_amount,
+  MIN(quantity) AS min_quantity,
+  MAX(quantity) AS max_quantity,
+  MIN(customer_age) AS min_customer_age,
+  MAX(customer_age) AS max_customer_age,
+  MIN(account_age_days) AS min_account_age_days,
+  MAX(account_age_days) AS max_account_age_days,
+  MIN(hour) AS min_hour,
+  MAX(hour) AS max_hour,
+  MIN(day_of_week) AS min_day_of_week,
+  MAX(day_of_week) AS max_day_of_week
+FROM `ecomm-analytics-portfolio.ecom_ml.features_fraud_train`;
+
+
+-- ============================================================
+-- 4.6 Fraud rate by engineered risk flags
+-- Helps validate whether engineered signals are useful for modeling
+-- ============================================================
+
+SELECT
+  is_new_account,
+  is_night_transaction,
+  address_mismatch,
+  COUNT(*) AS transactions,
+  ROUND(AVG(is_fraudulent) * 100, 2) AS fraud_rate_percentage
+FROM `ecomm-analytics-portfolio.ecom_ml.features_fraud_train`
+GROUP BY
+  is_new_account,
+  is_night_transaction,
+  address_mismatch
+ORDER BY fraud_rate_percentage DESC;
+
+
+-- ============================================================
+-- 4.7 Fraud rate by payment method
+-- Business validation for categorical risk patterns
+-- ============================================================
+
+SELECT
+  payment_method,
+  COUNT(*) AS transactions,
+  ROUND(AVG(is_fraudulent) * 100, 2) AS fraud_rate_percentage
+FROM `ecomm-analytics-portfolio.ecom_ml.features_fraud_train`
+GROUP BY payment_method
+ORDER BY fraud_rate_percentage DESC;
+
+
+-- ============================================================
+-- 4.8 Fraud rate by device
+-- Business validation for channel/device behavior
+-- ============================================================
+
+SELECT
+  device_used,
+  COUNT(*) AS transactions,
+  ROUND(AVG(is_fraudulent) * 100, 2) AS fraud_rate_percentage
+FROM `ecomm-analytics-portfolio.ecom_ml.features_fraud_train`
+GROUP BY device_used
+ORDER BY fraud_rate_percentage DESC;
+
+
+-- ============================================================
+-- 4.9 Fraud rate by product category
+-- Business validation for product-level risk
+-- ============================================================
+
+SELECT
+  product_category,
+  COUNT(*) AS transactions,
+  ROUND(AVG(is_fraudulent) * 100, 2) AS fraud_rate_percentage
+FROM `ecomm-analytics-portfolio.ecom_ml.features_fraud_train`
+GROUP BY product_category
+ORDER BY fraud_rate_percentage DESC;
+
+
+-- ============================================================
+-- 4.10 Top locations by fraud rate
+-- Uses minimum transaction threshold to avoid noisy locations
+-- ============================================================
+
+SELECT
+  customer_location,
+  COUNT(*) AS transactions,
+  ROUND(AVG(is_fraudulent) * 100, 2) AS fraud_rate_percentage
+FROM `ecomm-analytics-portfolio.ecom_ml.features_fraud_train`
+GROUP BY customer_location
+HAVING COUNT(*) >= 100
+ORDER BY fraud_rate_percentage DESC
+LIMIT 20;
