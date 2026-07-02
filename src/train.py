@@ -16,8 +16,14 @@ from metrics import evaluate_regression_model
 from preprocessing import build_tabular_preprocessor
 
 
-def main(input_data: str, output_dir: str):
+def main(input_data: str, output_dir: str, sample_size: int = None):
     df = load_parquet_data(input_data)
+
+    if sample_size is not None and sample_size < len(df):
+        df = df.sample(n=sample_size, random_state=42)
+        print(f"Using sample size: {sample_size}")
+
+    print(f"Dataset shape: {df.shape}")
 
     target = "target_transaction_amount"
 
@@ -48,6 +54,8 @@ def main(input_data: str, output_dir: str):
     X = df[features]
     y = df[target]
 
+    print(f"Modeling dataset shape: {df.shape}")
+
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
@@ -62,15 +70,17 @@ def main(input_data: str, output_dir: str):
 
     models = {
         "linear_regression": LinearRegression(),
+
         "decision_tree_regressor": DecisionTreeRegressor(
             max_depth=10,
-            min_samples_leaf=50,
+            min_samples_leaf=100,
             random_state=42
         ),
+
         "random_forest_regressor": RandomForestRegressor(
-            n_estimators=150,
-            max_depth=12,
-            min_samples_leaf=50,
+            n_estimators=30,
+            max_depth=10,
+            min_samples_leaf=100,
             random_state=42,
             n_jobs=-1
         )
@@ -81,6 +91,8 @@ def main(input_data: str, output_dir: str):
     metrics = []
 
     for model_name, estimator in models.items():
+        print(f"Training model: {model_name}")
+
         pipeline = Pipeline(steps=[
             ("preprocessor", preprocessor),
             ("model", estimator)
@@ -100,12 +112,21 @@ def main(input_data: str, output_dir: str):
         model_path = os.path.join(output_dir, f"{model_name}.joblib")
         joblib.dump(pipeline, model_path)
 
-    metrics_df = pd.DataFrame(metrics).sort_values("rmse")
-    metrics_df.to_csv(os.path.join(output_dir, "leaderboard.csv"), index=False)
+        print(f"Saved model: {model_path}")
+        print(model_metrics)
 
-    with open(os.path.join(output_dir, "metrics.json"), "w") as f:
+    metrics_df = pd.DataFrame(metrics).sort_values("rmse")
+
+    leaderboard_path = os.path.join(output_dir, "leaderboard.csv")
+    metrics_path = os.path.join(output_dir, "metrics.json")
+
+    metrics_df.to_csv(leaderboard_path, index=False)
+
+    with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
 
+    print("Training completed.")
+    print("Leaderboard:")
     print(metrics_df)
 
 
@@ -114,10 +135,12 @@ if __name__ == "__main__":
 
     parser.add_argument("--input_data", required=True)
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--sample_size", type=int, default=None)
 
     args = parser.parse_args()
 
     main(
         input_data=args.input_data,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        sample_size=args.sample_size
     )
